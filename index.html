@@ -1,78 +1,74 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
-<title>Servidor Minecraft</title>
-<style>
-body{
-font-family:Arial;
-text-align:center;
-background:#1e1e1e;
-color:white;
-}
-
-button{
-padding:15px;
-font-size:18px;
-background:#4CAF50;
-border:none;
-color:white;
-cursor:pointer;
-}
-
-button:hover{
-background:#45a049;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Servidor Minecraft</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #1a1a2e;
+            color: white;
+        }
+        h1 { font-size: 2.5rem; margin-bottom: 10px; }
+        p  { color: #aaa; margin-bottom: 40px; }
+        .buttons { display: flex; gap: 20px; }
+        button {
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.85; }
+        #btn-start { background-color: #4CAF50; color: white; }
+        #btn-stop  { background-color: #f44336; color: white; }
+        #status {
+            margin-top: 30px;
+            font-size: 1.1rem;
+            padding: 12px 24px;
+            border-radius: 8px;
+            background-color: #16213e;
+        }
+    </style>
 </head>
-
 <body>
+    <h1>🎮 Servidor Minecraft</h1>
+    <p>Controla tu servidor desde aquí</p>
 
-<h1>Servidor Minecraft</h1>
+    <div class="buttons">
+        <button id="btn-start" onclick="controlVM('start')">▶️ Encender</button>
+        <button id="btn-stop"  onclick="controlVM('stop')">⏹️ Apagar</button>
+    </div>
 
-<p id="estado">Comprobando estado...</p>
+    <div id="status">Esperando acción...</div>
 
-<button onclick="encender()">Encender Servidor</button>
+    <script>
+        const FUNCTION_URL = "https://encenderserverminecraft.azurewebsites.net/api/control_vm?code=q0S9XtraM9RMxvf2IFO654Bp4vMh1HwBODjWHauE_YOAAzFuzr8S0Q==";
+        const clave   = "#minecraft5653326bfs82b2611bs"; // ← cambia esto por la clave que pusiste en Variables de entorno
 
-<script>
+        async function controlVM(action) {
+            const status = document.getElementById("status");
+            status.textContent = "⏳ Procesando...";
 
-async function estado(){
-
-const ip="TU_IP_PUBLICA";
-
-const res = await fetch(
-"https://api.mcsrvstat.us/bedrock/2/"+ip+":19132"
-);
-
-const data = await res.json();
-
-if(data.online){
-document.getElementById("estado").innerText="🟢 Servidor ONLINE";
-}else{
-document.getElementById("estado").innerText="🔴 Servidor OFFLINE";
-}
-
-}
-
-async function encender(){
-
-alert("Iniciando servidor... puede tardar 40 segundos");
-
-fetch("https://api.github.com/repos/TU_USUARIO/TU_REPO/actions/workflows/start.yml/dispatches",{
-method:"POST",
-headers:{
-"Accept":"application/vnd.github+json",
-"Authorization":"Bearer TU_TOKEN"
-},
-body:JSON.stringify({
-ref:"main"
-})
-});
-
-}
-
-estado();
-
-</script>
-
+            try {
+                const res = await fetch(`${FUNCTION_URL}&action=${action}`, {
+                    headers: { "x-api-key": clave }
+                });
+                const msg = await res.text();
+                status.textContent = msg;
+            } catch (err) {
+                status.textContent = "❌ Error: " + err.message;
+            }
+        }
+    </script>
 </body>
 </html>
