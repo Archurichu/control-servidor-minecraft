@@ -17,8 +17,8 @@
             color: white;
         }
         h1 { font-size: 2.5rem; margin-bottom: 10px; }
-        p  { color: #aaa; margin-bottom: 40px; }
-        .buttons { display: flex; gap: 20px; }
+        p  { color: #aaa; margin-bottom: 20px; }
+        .buttons { display: flex; gap: 20px; margin-top: 20px; }
         button {
             padding: 15px 40px;
             font-size: 1.2rem;
@@ -38,11 +38,34 @@
             border-radius: 8px;
             background-color: #16213e;
         }
+        #vm-state {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.2rem;
+            padding: 10px 24px;
+            border-radius: 8px;
+            background-color: #16213e;
+        }
+        .dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background-color: gray;
+        }
+        .dot.running  { background-color: #4CAF50; }
+        .dot.stopped  { background-color: #f44336; }
+        .dot.loading  { background-color: #FFC107; }
     </style>
 </head>
 <body>
     <h1>🎮 Servidor Minecraft</h1>
     <p>Controla tu servidor desde aquí</p>
+
+    <div id="vm-state">
+        <div class="dot loading" id="dot"></div>
+        <span id="state-text">Consultando estado...</span>
+    </div>
 
     <div class="buttons">
         <button id="btn-start" onclick="controlVM('start')">▶️ Encender</button>
@@ -53,22 +76,48 @@
 
     <script>
         const FUNCTION_URL = "https://encenderserverminecraft.azurewebsites.net/api/control_vm?code=q0S9XtraM9RMxvf2IFO654Bp4vMh1HwBODjWHauE_YOAAzFuzr8S0Q==";
-        const clave   = "#minecraft5653326bfs82b2611bs"; // ← cambia esto por la clave que pusiste en Variables de entorno
+        const STATUS_URL   = "https://encenderserverminecraft.azurewebsites.net/api/vm_status?code=q0S9XtraM9RMxvf2IFO654Bp4vMh1HwBODjWHauE_YOAAzFuzr8S0Q==";
+        const clave = "#minecraft5653326bfs82b2611bs";
+
+        async function getStatus() {
+            const dot  = document.getElementById("dot");
+            const text = document.getElementById("state-text");
+            try {
+                const res  = await fetch(STATUS_URL, { headers: { "x-api-key": clave } });
+                const state = await res.text();
+                if (state === "running") {
+                    dot.className  = "dot running";
+                    text.textContent = "🟢 Servidor encendido";
+                } else if (state === "deallocated" || state === "stopped") {
+                    dot.className  = "dot stopped";
+                    text.textContent = "🔴 Servidor apagado";
+                } else {
+                    dot.className  = "dot loading";
+                    text.textContent = "🟡 Estado: " + state;
+                }
+            } catch (err) {
+                text.textContent = "❓ No se pudo obtener el estado";
+            }
+        }
 
         async function controlVM(action) {
             const status = document.getElementById("status");
             status.textContent = "⏳ Procesando...";
-
             try {
                 const res = await fetch(`${FUNCTION_URL}&action=${action}`, {
                     headers: { "x-api-key": clave }
                 });
                 const msg = await res.text();
                 status.textContent = msg;
+                setTimeout(getStatus, 3000); // Actualiza estado 3s después
             } catch (err) {
                 status.textContent = "❌ Error: " + err.message;
             }
         }
+
+        // Consultar estado al cargar la página y cada 30 segundos
+        getStatus();
+        setInterval(getStatus, 30000);
     </script>
 </body>
 </html>
