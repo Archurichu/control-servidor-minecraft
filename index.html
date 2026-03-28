@@ -1,123 +1,84 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Servidor Minecraft</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #1a1a2e;
-            color: white;
-        }
-        h1 { font-size: 2.5rem; margin-bottom: 10px; }
-        p  { color: #aaa; margin-bottom: 20px; }
-        .buttons { display: flex; gap: 20px; margin-top: 20px; }
-        button {
-            padding: 15px 40px;
-            font-size: 1.2rem;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: opacity 0.2s;
-        }
-        button:hover { opacity: 0.85; }
-        #btn-start { background-color: #4CAF50; color: white; }
-        #btn-stop  { background-color: #f44336; color: white; }
-        #status {
-            margin-top: 30px;
-            font-size: 1.1rem;
-            padding: 12px 24px;
-            border-radius: 8px;
-            background-color: #16213e;
-        }
-        #vm-state {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 1.2rem;
-            padding: 10px 24px;
-            border-radius: 8px;
-            background-color: #16213e;
-        }
-        .dot {
-            width: 14px;
-            height: 14px;
-            border-radius: 50%;
-            background-color: gray;
-        }
-        .dot.running  { background-color: #4CAF50; }
-        .dot.stopped  { background-color: #f44336; }
-        .dot.loading  { background-color: #FFC107; }
-    </style>
-</head>
-<body>
-    <h1>🎮 Servidor Minecraft</h1>
-    <p>Controla tu servidor desde aquí</p>
+import re, json, time, logging
+from datetime import datetime
+from azure.storage.blob import BlobServiceClient
 
-    <div id="vm-state">
-        <div class="dot loading" id="dot"></div>
-        <span id="state-text">Consultando estado...</span>
-    </div>
+# ─── CONFIGURA ESTOS VALORES ─────────────────────────────────────────────────
+CONNECTION_STRING = "TU_CONNECTION_STRING_AQUI"   # lo obtienes en el Paso 2
+CONTAINER_NAME    = "minecraft-stats"
+LOG_PATH          = "/home/archurichu/bedrock/bedrock_server.log"
+# ─────────────────────────────────────────────────────────────────────────────
 
-    <div class="buttons">
-        <button id="btn-start" onclick="controlVM('start')">▶️ Encender</button>
-        <button id="btn-stop"  onclick="controlVM('stop')">⏹️ Apagar</button>
-    </div>
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    <div id="status">Esperando acción...</div>
+jugadores   = {}   # gamertag → {muertes, primera_vez, ultima_vez}
+logs_recent = []   # últimas 50 líneas relevantes
 
-    <script>
-        const FUNCTION_URL = "https://encenderserverminecraft.azurewebsites.net/api/control_vm?code=q0S9XtraM9RMxvf2IFO654Bp4vMh1HwBODjWHauE_YOAAzFuzr8S0Q==";
-        const STATUS_URL   = "https://encenderserverminecraft.azurewebsites.net/api/vm_status?code=q0S9XtraM9RMxvf2IFO654Bp4vMh1HwBODjWHauE_YOAAzFuzr8S0Q==";
-        const clave = "#minecraft5653326bfs82b2611bs";
+RE_CONNECT  = re.compile(r"Player connected: (.+?),")
+RE_DISCONNECT = re.compile(r"Player disconnected: (.+?),")
+RE_DEATH    = re.compile(r"(.+?) was (killed|slain|blown|fell|drowned|burned|shot|squashed|pummeled|impaled|skewered|stung|frozen|struck)")
 
-        async function getStatus() {
-            const dot  = document.getElementById("dot");
-            const text = document.getElementById("state-text");
-            try {
-                const res  = await fetch(STATUS_URL, { headers: { "x-api-key": clave } });
-                const state = await res.text();
-                if (state === "running") {
-                    dot.className  = "dot running";
-                    text.textContent = "🟢 Servidor encendido";
-                } else if (state === "deallocated" || state === "stopped") {
-                    dot.className  = "dot stopped";
-                    text.textContent = "🔴 Servidor apagado";
-                } else {
-                    dot.className  = "dot loading";
-                    text.textContent = "🟡 Estado: " + state;
-                }
-            } catch (err) {
-                text.textContent = "❓ No se pudo obtener el estado";
-            }
-        }
+def parsear_log():
+    global logs_recent
+    try:
+        with open(LOG_PATH, "r", errors="ignore") as f:
+            lineas = f.readlines()
+    except FileNotFoundError:
+        return
 
-        async function controlVM(action) {
-            const status = document.getElementById("status");
-            status.textContent = "⏳ Procesando...";
-            try {
-                const res = await fetch(`${FUNCTION_URL}&action=${action}`, {
-                    headers: { "x-api-key": clave }
-                });
-                const msg = await res.text();
-                status.textContent = msg;
-                setTimeout(getStatus, 3000); // Actualiza estado 3s después
-            } catch (err) {
-                status.textContent = "❌ Error: " + err.message;
-            }
-        }
+    conectados_ahora = set()
+    nuevos_logs = []
 
-        // Consultar estado al cargar la página y cada 30 segundos
-        getStatus();
-        setInterval(getStatus, 30000);
-    </script>
-</body>
-</html>
+    for linea in lineas:
+        linea = linea.strip()
+
+        m = RE_CONNECT.search(linea)
+        if m:
+            nombre = m.group(1).strip()
+            if nombre not in jugadores:
+                jugadores[nombre] = {"muertes": 0, "primera_vez": linea[:19], "ultima_vez": linea[:19]}
+            else:
+                jugadores[nombre]["ultima_vez"] = linea[:19]
+            conectados_ahora.add(nombre)
+            nuevos_logs.append(f"🟢 {nombre} entró al servidor")
+
+        m = RE_DISCONNECT.search(linea)
+        if m:
+            nombre = m.group(1).strip()
+            conectados_ahora.discard(nombre)
+            nuevos_logs.append(f"🔴 {nombre} salió del servidor")
+
+        m = RE_DEATH.search(linea)
+        if m:
+            nombre = m.group(1).strip()
+            if nombre in jugadores:
+                jugadores[nombre]["muertes"] += 1
+            nuevos_logs.append(f"💀 {linea}")
+
+    logs_recent = nuevos_logs[-50:]
+
+    stats = {
+        "actualizado": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "conectados_ahora": list(conectados_ahora),
+        "jugadores": jugadores,
+        "logs": logs_recent
+    }
+    subir_blob(stats)
+
+def subir_blob(stats):
+    try:
+        cliente = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+        blob = cliente.get_blob_client(container=CONTAINER_NAME, blob="stats.json")
+        blob.upload_blob(
+            json.dumps(stats, ensure_ascii=False, indent=2),
+            overwrite=True,
+            content_settings={"content_type": "application/json"}
+        )
+        logging.info("stats.json subido correctamente")
+    except Exception as e:
+        logging.error(f"Error subiendo blob: {e}")
+
+if __name__ == "__main__":
+    logging.info("Iniciando recolector de stats...")
+    while True:
+        parsear_log()
+        time.sleep(30)
