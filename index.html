@@ -1,84 +1,380 @@
-import re, json, time, logging
-from datetime import datetime
-from azure.storage.blob import BlobServiceClient
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Servidor Minecraft</title>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;700&family=DM+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:      #0d0f14;
+    --surface: #13161f;
+    --border:  #1e2330;
+    --green:   #4ade80;
+    --red:     #f87171;
+    --yellow:  #fbbf24;
+    --blue:    #60a5fa;
+    --muted:   #4b5563;
+    --text:    #e2e8f0;
+    --subtext: #94a3b8;
+  }
 
-# ─── CONFIGURA ESTOS VALORES ─────────────────────────────────────────────────
-CONNECTION_STRING = "TU_CONNECTION_STRING_AQUI"   # lo obtienes en el Paso 2
-CONTAINER_NAME    = "minecraft-stats"
-LOG_PATH          = "/home/archurichu/bedrock/bedrock_server.log"
-# ─────────────────────────────────────────────────────────────────────────────
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 32px 16px;
+  }
 
-jugadores   = {}   # gamertag → {muertes, primera_vez, ultima_vez}
-logs_recent = []   # últimas 50 líneas relevantes
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 32px 32px;
+    opacity: 0.4;
+    pointer-events: none;
+    z-index: 0;
+  }
 
-RE_CONNECT  = re.compile(r"Player connected: (.+?),")
-RE_DISCONNECT = re.compile(r"Player disconnected: (.+?),")
-RE_DEATH    = re.compile(r"(.+?) was (killed|slain|blown|fell|drowned|burned|shot|squashed|pummeled|impaled|skewered|stung|frozen|struck)")
+  .card {
+    position: relative;
+    z-index: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    width: 100%;
+    max-width: 460px;
+  }
 
-def parsear_log():
-    global logs_recent
-    try:
-        with open(LOG_PATH, "r", errors="ignore") as f:
-            lineas = f.readlines()
-    except FileNotFoundError:
-        return
+  .header {
+    text-align: center;
+  }
 
-    conectados_ahora = set()
-    nuevos_logs = []
+  .header h1 {
+    font-family: 'Pixelify Sans', monospace;
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.1;
+  }
 
-    for linea in lineas:
-        linea = linea.strip()
+  .header h1 span { color: var(--green); }
 
-        m = RE_CONNECT.search(linea)
-        if m:
-            nombre = m.group(1).strip()
-            if nombre not in jugadores:
-                jugadores[nombre] = {"muertes": 0, "primera_vez": linea[:19], "ultima_vez": linea[:19]}
-            else:
-                jugadores[nombre]["ultima_vez"] = linea[:19]
-            conectados_ahora.add(nombre)
-            nuevos_logs.append(f"🟢 {nombre} entró al servidor")
+  .header p {
+    margin-top: 6px;
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
 
-        m = RE_DISCONNECT.search(linea)
-        if m:
-            nombre = m.group(1).strip()
-            conectados_ahora.discard(nombre)
-            nuevos_logs.append(f"🔴 {nombre} salió del servidor")
+  .status-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    margin-bottom: 4px;
+  }
 
-        m = RE_DEATH.search(linea)
-        if m:
-            nombre = m.group(1).strip()
-            if nombre in jugadores:
-                jugadores[nombre]["muertes"] += 1
-            nuevos_logs.append(f"💀 {linea}")
+  .dot-wrap {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
 
-    logs_recent = nuevos_logs[-50:]
+  .dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
 
-    stats = {
-        "actualizado": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "conectados_ahora": list(conectados_ahora),
-        "jugadores": jugadores,
-        "logs": logs_recent
+  .dot.running { background: var(--green); }
+  .dot.stopped { background: var(--red); }
+  .dot.loading { background: var(--yellow); }
+
+  .dot.running::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    background: var(--green);
+    opacity: 0.25;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.25; }
+    50%       { transform: scale(1.6); opacity: 0; }
+  }
+
+  .status-info { flex: 1; }
+
+  .status-label {
+    font-size: 0.68rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 3px;
+  }
+
+  #state-text {
+    font-size: 1rem;
+    font-weight: 500;
+  }
+
+  #last-updated {
+    font-size: 0.68rem;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  .buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .btn {
+    padding: 14px 10px;
+    font-family: 'Pixelify Sans', monospace;
+    font-size: 1rem;
+    font-weight: 700;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .btn:active   { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+  .btn-start { background: var(--green); color: #052e16; }
+  .btn-stop  { background: var(--red);   color: #450a0a; }
+
+  #action-msg {
+    margin-top: 12px;
+    padding: 11px 16px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-size: 0.82rem;
+    color: var(--subtext);
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: border-color 0.3s, color 0.3s;
+  }
+
+  #action-msg.ok    { border-color: var(--green); color: var(--green); }
+  #action-msg.error { border-color: var(--red);   color: var(--red); }
+  #action-msg.busy  { border-color: var(--yellow); color: var(--yellow); }
+
+  .server-ip {
+    margin-top: 14px;
+    padding: 12px 16px;
+    background: var(--bg);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .server-ip .label {
+    font-size: 0.66rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 3px;
+  }
+
+  .server-ip .ip {
+    font-size: 0.92rem;
+    color: var(--blue);
+    letter-spacing: 0.5px;
+  }
+
+  .copy-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 0.72rem;
+    padding: 5px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+    flex-shrink: 0;
+  }
+
+  .copy-btn:hover        { color: var(--text); border-color: var(--subtext); }
+  .copy-btn.copied       { color: var(--green); border-color: var(--green); }
+
+  .footer {
+    position: relative;
+    z-index: 1;
+    font-size: 0.66rem;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-align: center;
+  }
+
+  .spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="header">
+    <h1>&#9935; Servidor <span>Minecraft</span></h1>
+    <p>archurichu &middot; bedrock edition</p>
+  </div>
+</div>
+
+<div class="card">
+
+  <div class="status-card">
+    <div class="dot-wrap">
+      <div class="dot loading" id="dot"></div>
+    </div>
+    <div class="status-info">
+      <div class="status-label">estado del servidor</div>
+      <div id="state-text">Consultando...</div>
+      <div id="last-updated"></div>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button class="btn btn-start" id="btn-start" onclick="controlVM('start')">&#9654; Encender</button>
+    <button class="btn btn-stop"  id="btn-stop"  onclick="controlVM('stop')">&#9632; Apagar</button>
+  </div>
+
+  <div id="action-msg">
+    <span>Esperando accion...</span>
+  </div>
+
+  <div class="server-ip">
+    <div>
+      <div class="label">IP del servidor</div>
+      <div class="ip">57.156.32.232 </div>
+    </div>
+    <button class="copy-btn" id="copy-btn" onclick="copiarIP()">copiar</button>
+  </div>
+
+</div>
+
+
+
+<script>
+  const FUNCTION_URL = "https://encenderserverminecraft.azurewebsites.net/api/control_vm?code=TU_CODE";
+  const STATUS_URL   = "https://encenderserverminecraft.azurewebsites.net/api/vm_status?code=TU_CODE";
+  const clave        = "#minecraft5653326bfs82b2611bs";
+
+  function setMsg(texto, tipo) {
+    const el = document.getElementById("action-msg");
+    el.className = tipo || "";
+    el.innerHTML = tipo === "busy"
+      ? '<div class="spinner"></div><span>' + texto + '</span>'
+      : '<span>' + texto + '</span>';
+  }
+
+  async function getStatus() {
+    const dot  = document.getElementById("dot");
+    const text = document.getElementById("state-text");
+    const upd  = document.getElementById("last-updated");
+    try {
+      const res   = await fetch(STATUS_URL, { headers: { "x-api-key": clave } });
+      const state = await res.text();
+      const hora  = new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" });
+      upd.textContent = "ultima consulta: " + hora;
+      if (state === "running") {
+        dot.className    = "dot running";
+        text.textContent = "Servidor encendido";
+        text.style.color = "var(--green)";
+      } else if (state === "deallocated" || state === "stopped") {
+        dot.className    = "dot stopped";
+        text.textContent = "Servidor apagado";
+        text.style.color = "var(--red)";
+      } else {
+        dot.className    = "dot loading";
+        text.textContent = "Estado: " + state;
+        text.style.color = "var(--yellow)";
+      }
+    } catch (err) {
+      dot.className    = "dot loading";
+      text.textContent = "Sin respuesta";
+      text.style.color = "var(--muted)";
     }
-    subir_blob(stats)
+  }
 
-def subir_blob(stats):
-    try:
-        cliente = BlobServiceClient.from_connection_string(CONNECTION_STRING)
-        blob = cliente.get_blob_client(container=CONTAINER_NAME, blob="stats.json")
-        blob.upload_blob(
-            json.dumps(stats, ensure_ascii=False, indent=2),
-            overwrite=True,
-            content_settings={"content_type": "application/json"}
-        )
-        logging.info("stats.json subido correctamente")
-    except Exception as e:
-        logging.error(f"Error subiendo blob: {e}")
+  async function controlVM(action) {
+    const label = action === "start" ? "Encendiendo servidor..." : "Apagando servidor...";
+    setMsg(label, "busy");
+    document.getElementById("btn-start").disabled = true;
+    document.getElementById("btn-stop").disabled  = true;
+    try {
+      const res = await fetch(FUNCTION_URL + "&action=" + action, {
+        headers: { "x-api-key": clave }
+      });
+      const msg = await res.text();
+      setMsg(msg, res.ok ? "ok" : "error");
+      setTimeout(getStatus, 4000);
+    } catch (err) {
+      setMsg("Error de conexion: " + err.message, "error");
+    } finally {
+      document.getElementById("btn-start").disabled = false;
+      document.getElementById("btn-stop").disabled  = false;
+    }
+  }
 
-if __name__ == "__main__":
-    logging.info("Iniciando recolector de stats...")
-    while True:
-        parsear_log()
-        time.sleep(30)
+  function copiarIP() {
+    const btn = document.getElementById("copy-btn");
+    navigator.clipboard.writeText("57.156.32.232").then(function() {
+      btn.textContent = "copiado!";
+      btn.classList.add("copied");
+      setTimeout(function() {
+        btn.textContent = "copiar";
+        btn.classList.remove("copied");
+      }, 2000);
+    });
+  }
+
+  getStatus();
+  setInterval(getStatus, 30000);
+</script>
+</body>
+</html>
